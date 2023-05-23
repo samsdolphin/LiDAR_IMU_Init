@@ -1,30 +1,41 @@
 common:
-    lid_topic:  "/velodyne_points"
-    imu_topic:  "/imu/data"
+# lid_topic:  "/kitti/velo/pointcloud"
+# imu_topic:  "/kitti/oxts/imu"
+    lid_topic:  "/points_raw"
+#    lid_topic:  "/cloud"
+    imu_topic:  "/imu_correct"
+#    lid_topic:  "/velodyne_points"
+#    imu_topic:  "/imu/data"
 
 preprocess:
     lidar_type: 2                # Velodyne LiDAR
-    scan_line: 16
-    blind: 2
+    scan_line: 32
+    blind: 4
     feature_extract_en: false
 
-initialization:
-    cut_frame_num: 4 # must be positive integer
+calibration:
+    cut_frame: true # false: do not cut input pointcloud
+    cut_frame_num: 5 # must be positive integer
     orig_odom_freq: 10
     mean_acc_norm: 9.81 # 1: for livox built-in IMU
-    online_refine_time: 15.0
-    data_accum_length: 800
+    online_refine_time: 20.0
+    data_accum_length: 300
     Rot_LI_cov: [ 0.00005, 0.00005, 0.00005 ]
     Trans_LI_cov: [ 0.0001, 0.0001, 0.0001 ]
 
 mapping:
+    imu_en: false
     filter_size_surf: 0.05
     filter_size_map: 0.15
-    gyr_cov: 0.5
-    acc_cov: 0.5
+    gyr_cov: 10
+    acc_cov: 2
     b_acc_cov: 0.0001
     b_gyr_cov: 0.0001
-    det_range: 100.0
+    det_range:     100.0
+    extrinsic_T: [ -0.0, 0.0, 0.0 ]
+    extrinsic_R: [1, 0, 0, 
+                   0, 1, 0, 
+                   0, 0, 1]
 
 publish:
     path_en:  true

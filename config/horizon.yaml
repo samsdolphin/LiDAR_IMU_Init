@@ -1,23 +1,25 @@
 common:
     lid_topic:  "/livox/lidar"
     imu_topic:  "/livox/imu"
+    time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
 
 preprocess:
-    lidar_type: 1                # Livox series LiDAR
+    lidar_type: 1                # Livox Avia LiDAR
     feature_extract_en: false
     scan_line: 6
     blind: 1
 
-initialization:
+calibration:
     cut_frame_num: 5 # must be positive integer
     orig_odom_freq: 10
     mean_acc_norm: 1.0 # 1: for livox built-in IMU
     online_refine_time: 20.0
-    data_accum_length: 500
+    data_accum_length: 40
     Rot_LI_cov: [ 0.00005, 0.00005, 0.00005 ]
-    Trans_LI_cov: [ 0.00001, 0.00001, 0.00001 ]
+    Trans_LI_cov: [ 0.0001, 0.0001, 0.0001 ]
 
 mapping:
+    imu_en: false
     filter_size_surf: 0.05
     filter_size_map: 0.15
     gyr_cov: 50
@@ -25,12 +27,17 @@ mapping:
     b_acc_cov: 0.0001
     b_gyr_cov: 0.0001
     det_range:     260.0
+#    extrinsic_T: [ 0.05512, 0.02226, -0.0297 ]
+    extrinsic_T: [ 0.0, 0.0, 0.0 ]
+    extrinsic_R: [ 1, 0, 0,
+                   0, 1, 0,
+                   0, 0, 1]
 
 publish:
     path_en:  true
     scan_publish_en:  true       # false: close all the point cloud output
     dense_publish_en: true       # false: low down the points number in a global-frame point clouds scan.
-    scan_bodyframe_pub_en: false  # true: output the point cloud scans in IMU-body-frame
+    scan_bodyframe_pub_en: true  # true: output the point cloud scans in IMU-body-frame
 
 pcd_save:
     pcd_save_en: false

@@ -13,10 +13,17 @@
 #include <eigen_conversions/eigen_msg.h>
 #include <color.h>
 #include <scope_timer.hpp>
+#include <unordered_map>
 
 using namespace std;
 using namespace Eigen;
 
+#define HASH_P 116101
+#define MAX_N 10000000019
+#define SMALL_EPS 1e-10
+
+// #define DEBUG_PRINT
+# define DEPLOY
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 30
 #define PI_M (3.14159265358)
@@ -52,7 +59,7 @@ const V3D Zero3d(0, 0, 0);
 // Vector3d Lidar_offset_to_IMU(0.05512, 0.02226, -0.0297); // Horizon
 // Vector3d Lidar_offset_to_IMU(0.04165, 0.02326, -0.0284); // Avia
 
-enum LID_TYPE{AVIA = 1, VELO, OUSTER, L515, PANDAR, ROBOSENSE}; //{1, 2, 3}
+enum LID_TYPE{AVIA = 1, VELO, OUSTER, L515, PANDAR, PANDAR128}; //{1, 2, 3}
 struct MeasureGroup     // Lidar data and imu dates for the curent process
 {
     MeasureGroup()
@@ -186,13 +193,13 @@ auto set_pose6d(const double t, const Matrix<T, 3, 1> &a, const Matrix<T, 3, 1> 
 {
     Pose6D rot_kp;
     rot_kp.offset_time = t;
-    for (int i = 0; i < 3; i++)
+    for(int i = 0; i < 3; i++)
     {
         rot_kp.acc[i] = a(i);
         rot_kp.gyr[i] = g(i);
         rot_kp.vel[i] = v(i);
         rot_kp.pos[i] = p(i);
-        for (int j = 0; j < 3; j++)  rot_kp.rot[i*3+j] = R(i,j);
+        for(int j = 0; j < 3; j++)  rot_kp.rot[i*3+j] = R(i,j);
     }
     // Map<M3D>(rot_kp.rot, 3,3) = R;
     return move(rot_kp);
@@ -213,7 +220,7 @@ bool esti_normvector(Matrix<T, 3, 1> &normvec, const PointVector &point, const T
     b.setOnes();
     b *= -1.0f;
 
-    for (int j = 0; j < point_num; j++)
+    for(int j = 0; j < point_num; j++)
     {
         A(j,0) = point[j].x;
         A(j,1) = point[j].y;
@@ -221,9 +228,9 @@ bool esti_normvector(Matrix<T, 3, 1> &normvec, const PointVector &point, const T
     }
     normvec = A.colPivHouseholderQr().solve(b);
     
-    for (int j = 0; j < point_num; j++)
+    for(int j = 0; j < point_num; j++)
     {
-        if (fabs(normvec(0) * point[j].x + normvec(1) * point[j].y + normvec(2) * point[j].z + 1.0f) > threshold)
+        if(fabs(normvec(0) * point[j].x + normvec(1) * point[j].y + normvec(2) * point[j].z + 1.0f) > threshold)
         {
             return false;
         }
@@ -242,7 +249,7 @@ bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &
     b.setOnes();
     b *= -1.0f;
 
-    for (int j = 0; j < NUM_MATCH_POINTS; j++)
+    for(int j = 0; j < NUM_MATCH_POINTS; j++)
     {
         A(j,0) = point[j].x;
         A(j,1) = point[j].y;
@@ -257,15 +264,107 @@ bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &
     pca_result(2) = normvec(2) / n;
     pca_result(3) = 1.0 / n;
 
-    for (int j = 0; j < NUM_MATCH_POINTS; j++)
+    for(int j = 0; j < NUM_MATCH_POINTS; j++)
     {
-        if (fabs(pca_result(0) * point[j].x + pca_result(1) * point[j].y + pca_result(2) * point[j].z + pca_result(3)) > threshold)
+        if(fabs(pca_result(0) * point[j].x + pca_result(1) * point[j].y + pca_result(2) * point[j].z + pca_result(3)) > threshold)
         {
             return false;
         }
     }
 
     return true;
+}
+
+class VOXEL_LOC
+{
+public:
+  int64_t x, y, z;
+
+  VOXEL_LOC(int64_t vx=0, int64_t vy=0, int64_t vz=0): x(vx), y(vy), z(vz){}
+
+  bool operator == (const VOXEL_LOC &other) const
+  {
+    return (x==other.x && y==other.y && z==other.z);
+  }
+};
+
+namespace std
+{
+  template<>
+  struct hash<VOXEL_LOC>
+  {
+    size_t operator() (const VOXEL_LOC &s) const
+    {
+      using std::size_t; using std::hash;
+      // return (((hash<int64_t>()(s.z)*HASH_P)%MAX_N + hash<int64_t>()(s.y))*HASH_P)%MAX_N + hash<int64_t>()(s.x);
+      long long index_x, index_y, index_z;
+			double cub_len = 0.125;
+			index_x = int(round(floor((s.x)/cub_len + SMALL_EPS)));
+			index_y = int(round(floor((s.y)/cub_len + SMALL_EPS)));
+			index_z = int(round(floor((s.z)/cub_len + SMALL_EPS)));
+			return (((((index_z * HASH_P) % MAX_N + index_y) * HASH_P) % MAX_N) + index_x) % MAX_N;
+    }
+  };
+}
+
+struct M_POINT
+{
+	float xyz[3];
+	int count = 0;
+};
+
+template <typename _T>
+void downsample_voxel(pcl::PointCloud<_T>& pc, double voxel_size)
+{
+	if(voxel_size < 0.01)
+		return;
+
+	std::unordered_map<VOXEL_LOC, M_POINT> feature_map;
+	size_t pt_size = pc.size();
+
+	for(size_t i = 0; i < pt_size; i++)
+	{
+		_T& pt_trans = pc[i];
+		float loc_xyz[3];
+		for(int j = 0; j < 3; j++)
+		{
+			loc_xyz[j] = pt_trans.data[j] / voxel_size;
+			if(loc_xyz[j] < 0)
+				loc_xyz[j] -= 1.0;
+		}
+
+		VOXEL_LOC position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
+		auto iter = feature_map.find(position);
+		if(iter != feature_map.end())
+		{
+			iter->second.xyz[0] += pt_trans.x;
+			iter->second.xyz[1] += pt_trans.y;
+			iter->second.xyz[2] += pt_trans.z;
+			iter->second.count++;
+		}
+		else
+		{
+			M_POINT anp;
+			anp.xyz[0] = pt_trans.x;
+			anp.xyz[1] = pt_trans.y;
+			anp.xyz[2] = pt_trans.z;
+			anp.count = 1;
+			feature_map[position] = anp;
+		}
+	}
+
+	pt_size = feature_map.size();
+	pc.clear();
+	pc.resize(pt_size);
+
+	size_t i = 0;
+	for(auto iter = feature_map.begin(); iter != feature_map.end(); ++iter)
+	{
+		pc[i].x = iter->second.xyz[0] / iter->second.count;
+		pc[i].y = iter->second.xyz[1] / iter->second.count;
+		pc[i].z = iter->second.xyz[2] / iter->second.count;
+		i++;
+	}
 }
 
 #endif

@@ -55,7 +55,7 @@ struct PointType_CMP{
         this->dist = d;
     };
     bool operator < (const PointType_CMP &a)const{
-        if (fabs(dist - a.dist) < 1e-10) return point.x < a.point.x;
+        if(fabs(dist - a.dist) < 1e-10) return point.x < a.point.x;
           else return dist < a.dist;
     }    
 };

@@ -1,7 +1,7 @@
 #include "LI_init.h"
 
 /*
-Description: LI-Init: a temporal-spatial lidar-inertial initialization package
+Description: LI-Init: a temporal-spatial lidar-imu initialization package
 Author: Fangcheng Zhu
 email: zhufc@connect.hku.hk
 */
@@ -14,6 +14,7 @@ LI_Init::LI_Init()
     fout_before_filt_Lidar.open(FILE_DIR("Lidar_before_filter.txt"), ios::out);
     fout_acc_cost.open(FILE_DIR("acc_cost.txt"), ios::out);
     fout_after_rot.open(FILE_DIR("Lidar_omg_after_rot.txt"), ios::out);
+    fout_correlation.open(FILE_DIR("correlation.txt"), ios::out);
     data_accum_length = 300;
     Rot_Grav_wrt_Init_Lidar = Eye3d;
     Trans_Lidar_wrt_IMU = Zero3d;
@@ -33,7 +34,7 @@ void LI_Init::set_Lidar_state(const deque<CalibState> &Lidar_states) {
 }
 
 void LI_Init::set_states_2nd_filter(const deque<CalibState> &IMU_states, const deque<CalibState> &Lidar_states) {
-    for (int i = 0; i < IMU_state_group.size(); i++) {
+    for(int i = 0; i < IMU_state_group.size(); i++) {
         IMU_state_group[i].ang_acc = IMU_states[i].ang_acc;
         Lidar_state_group[i].ang_acc = Lidar_states[i].ang_acc;
         Lidar_state_group[i].linear_acc = Lidar_states[i].linear_acc;
@@ -41,11 +42,11 @@ void LI_Init::set_states_2nd_filter(const deque<CalibState> &IMU_states, const d
 }
 
 void LI_Init::fout_before_filter() {
-    for (auto it_IMU = IMU_state_group.begin(); it_IMU != IMU_state_group.end() - 1; it_IMU++) {
+    for(auto it_IMU = IMU_state_group.begin(); it_IMU != IMU_state_group.end() - 1; it_IMU++) {
         fout_before_filt_IMU << setprecision(15) << it_IMU->ang_vel.transpose() << " " << it_IMU->ang_vel.norm() << " "
                              << it_IMU->linear_acc.transpose() << " " << it_IMU->timeStamp << endl;
     }
-    for (auto it = Lidar_state_group.begin(); it != Lidar_state_group.end() - 1; it++) {
+    for(auto it = Lidar_state_group.begin(); it != Lidar_state_group.end() - 1; it++) {
         fout_before_filt_Lidar << setprecision(15) << it->ang_vel.transpose() << " " << it->ang_vel.norm() << " "
                                << it->timeStamp << endl;
     }
@@ -81,31 +82,37 @@ void LI_Init::push_Lidar_CalibState(const M3D &rot, const V3D &omg, const V3D &l
 
 void LI_Init::downsample_interpolate_IMU(const double &move_start_time) {
 
+    //删除静置很久的数据，只留3s静置数据用于归一化加速度
     while (IMU_state_group_ALL.front().timeStamp < move_start_time - 3.0)
         IMU_state_group_ALL.pop_front();
     while (Lidar_state_group.front().timeStamp < move_start_time - 3.0)
         Lidar_state_group.pop_front();
 
+//    cout << "First IMU time:   " << fixed << setprecision(4) << IMU_state_group_ALL.front().timeStamp << endl;
+//    cout << "First Lidar time: " << Lidar_state_group.front().timeStamp << endl;
 
-    //Original IMU measurements
+    //原始的全部IMU measurements
     deque<CalibState> IMU_states_all_origin;
     IMU_states_all_origin.assign(IMU_state_group_ALL.begin(), IMU_state_group_ALL.end() - 1);
 
-    //Mean filter to attenuate noise
+    //对加速度数据做均值滤波，抑制噪声
     int mean_filt_size = 2;
-    for (int i = mean_filt_size; i < IMU_state_group_ALL.size() - mean_filt_size; i++) {
+    for(int i = mean_filt_size; i < IMU_state_group_ALL.size() - mean_filt_size; i++) {
         V3D acc_real = Zero3d;
-        for (int k = -mean_filt_size; k < mean_filt_size + 1; k++)
+        for(int k = -mean_filt_size; k < mean_filt_size + 1; k++) {
+            //取前后 2*size + 1 个加速度的平均值
             acc_real += (IMU_states_all_origin[i + k].linear_acc - acc_real) / (k + mean_filt_size + 1);
-        IMU_state_group_ALL[i].linear_acc = acc_real;
+        }
+//        acc_real = IMU_states_all_origin[i].linear_acc;
+        IMU_state_group_ALL[i].linear_acc = acc_real;   //存储的加速度值为均值滤波后的，后续插值会用到
     }
 
 
 
-    //Down-sample and interpolation，Fig.4 in the paper
-    for (int i = 0; i < Lidar_state_group.size(); i++) {
-        for (int j = 1; j < IMU_state_group_ALL.size(); j++) {
-            if (IMU_state_group_ALL[j - 1].timeStamp <= Lidar_state_group[i].timeStamp
+    //Down-sample和interpolation，使频率与lidar里程计频率一致，论文Fig.4
+    for(int i = 0; i < Lidar_state_group.size(); i++) {
+        for(int j = 1; j < IMU_state_group_ALL.size(); j++) {
+            if(IMU_state_group_ALL[j - 1].timeStamp <= Lidar_state_group[i].timeStamp
                 && IMU_state_group_ALL[j].timeStamp > Lidar_state_group[i].timeStamp) {
                 CalibState IMU_state_interpolation;
                 double delta_t = IMU_state_group_ALL[j].timeStamp - IMU_state_group_ALL[j - 1].timeStamp;
@@ -125,8 +132,8 @@ void LI_Init::downsample_interpolate_IMU(const double &move_start_time) {
 }
 
 void LI_Init::central_diff() {
-    auto it_IMU_state = IMU_state_group.begin() + 1;
-    for (; it_IMU_state != IMU_state_group.end() - 2; it_IMU_state++) {
+    auto it_IMU_state = IMU_state_group.begin() + 1;  //头尾两个的加速度设为0；中间的用中心差分计算
+    for(; it_IMU_state != IMU_state_group.end() - 2; it_IMU_state++) {
         auto last_imu = it_IMU_state - 1;
         auto next_imu = it_IMU_state + 1;
         double dt_imu = next_imu->timeStamp - last_imu->timeStamp;
@@ -140,7 +147,7 @@ void LI_Init::central_diff() {
     }
 
     auto it_Lidar_state = Lidar_state_group.begin() + 1;
-    for (; it_Lidar_state != Lidar_state_group.end() - 2; it_Lidar_state++) {
+    for(; it_Lidar_state != Lidar_state_group.end() - 2; it_Lidar_state++) {
         auto last_lidar = it_Lidar_state - 1;
         auto next_lidar = it_Lidar_state + 1;
         double dt_lidar = next_lidar->timeStamp - last_lidar->timeStamp;
@@ -161,19 +168,21 @@ void LI_Init::xcorr_temporal_init(const double &odom_freq) {
     int N = IMU_state_group.size();
     //Calculate mean value of IMU and LiDAR angular velocity
     double mean_IMU_ang_vel = 0, mean_LiDAR_ang_vel = 0;
-    for (int i = 0; i < N; i++) {
+    for(int i = 0; i < N; i++) {
         mean_IMU_ang_vel += (IMU_state_group[i].ang_vel.norm() - mean_IMU_ang_vel) / (i + 1);
         mean_LiDAR_ang_vel += (Lidar_state_group[i].ang_vel.norm() - mean_LiDAR_ang_vel) / (i + 1);
     }
 
     //Calculate zero-centered cross correlation
     double max_corr = -DBL_MAX;
-    for (int lag = -N + 1; lag < N; lag++) {
+    for(int lag = -N + 1; lag < N; lag++) {
+        //Calculate the cross correlation
         double corr = 0;
+//        double normalized_corr = 0, diff = 0;
         int cnt = 0;
-        for (int i = 0; i < N; i++) {
+        for(int i = 0; i < N; i++) {
             int j = i + lag;
-            if (j < 0 || j > N - 1)
+            if(j < 0 || j > N - 1)
                 continue;
             else {
                 cnt++;
@@ -181,8 +190,9 @@ void LI_Init::xcorr_temporal_init(const double &odom_freq) {
                         (Lidar_state_group[j].ang_vel.norm() - mean_LiDAR_ang_vel);  // Zero-centered cross correlation
             }
         }
+        fout_correlation << lag << " " << corr << " " << endl;
 
-        if (corr > max_corr) {
+        if(corr > max_corr) {
             max_corr = corr;
             lag_IMU_wtr_Lidar = -lag;
         }
@@ -190,10 +200,11 @@ void LI_Init::xcorr_temporal_init(const double &odom_freq) {
 
     time_lag_1 = lag_IMU_wtr_Lidar / odom_freq;
     cout << "Max Cross-correlation: IMU lag wtr Lidar : " << -lag_IMU_wtr_Lidar << endl;
+//    cout << "First estimated IMU time delay wtr Lidar : " << time_lag_1 << endl << endl;
 }
 
 void LI_Init::IMU_time_compensate(const double &lag_time, const bool &is_discard) {
-    if (is_discard) {
+    if(is_discard) {
         //Discard first 10 Lidar estimations and corresponding IMU measurements due to long time interval
         int i = 0;
         while (i < 10) {
@@ -204,7 +215,7 @@ void LI_Init::IMU_time_compensate(const double &lag_time, const bool &is_discard
     }
 
     auto it_IMU_state = IMU_state_group.begin();
-    for (; it_IMU_state != IMU_state_group.end() - 1; it_IMU_state++) {
+    for(; it_IMU_state != IMU_state_group.end() - 1; it_IMU_state++) {
         it_IMU_state->timeStamp = it_IMU_state->timeStamp - lag_time;
     }
 
@@ -221,7 +232,7 @@ void LI_Init::IMU_time_compensate(const double &lag_time, const bool &is_discard
 }
 
 void LI_Init::cut_sequence_tail() {
-    for (int i = 0; i < 20; ++i) {
+    for(int i = 0; i < 20; ++i) {
         Lidar_state_group.pop_back();
         IMU_state_group.pop_back();
     }
@@ -237,11 +248,12 @@ void LI_Init::cut_sequence_tail() {
         Lidar_state_group.pop_back();
 }
 
+
 void LI_Init::acc_interpolate() {
     //Interpolation to get acc_I(t_L)
-    for (int i = 1; i < Lidar_state_group.size() - 1; i++) {
+    for(int i = 1; i < Lidar_state_group.size() - 1; i++) {
         double deltaT = Lidar_state_group[i].timeStamp - IMU_state_group[i].timeStamp;
-        if (deltaT > 0) {
+        if(deltaT > 0) {
             double DeltaT = IMU_state_group[i + 1].timeStamp - IMU_state_group[i].timeStamp;
             double s = deltaT / DeltaT;
             IMU_state_group[i].linear_acc = s * IMU_state_group[i + 1].linear_acc +
@@ -257,16 +269,18 @@ void LI_Init::acc_interpolate() {
     }
 }
 
+
 void LI_Init::Butter_filt(const deque<CalibState> &signal_in, deque<CalibState> &signal_out) {
     LI_Init::Butterworth butter;
     butter.extend_num = 10 * (butter.Coeff_size - 1);
     auto it_front = signal_in.begin() + butter.extend_num;
     auto it_back = signal_in.end() - 1 - butter.extend_num;
 
+    //对信号的前端、后端进行延拓
     deque<CalibState> extend_front;
     deque<CalibState> extend_back;
 
-    for (int idx = 0; idx < butter.extend_num; idx++) {
+    for(int idx = 0; idx < butter.extend_num; idx++) {
         extend_front.push_back(*it_front);
         extend_back.push_front(*it_back);
         it_front--;
@@ -285,20 +299,20 @@ void LI_Init::Butter_filt(const deque<CalibState> &signal_in, deque<CalibState> 
 
     deque<CalibState> sig_out(sig_extended);
     //One-direction Butterworth filter Starts (all states)
-    for (int i = butter.Coeff_size; i < sig_extended.size() - butter.extend_num; i++) {
+    for(int i = butter.Coeff_size; i < sig_extended.size() - butter.extend_num; i++) {
         CalibState temp_state;
-        for (int j = 0; j < butter.Coeff_size; j++) {
+        for(int j = 0; j < butter.Coeff_size; j++) {
             auto it_sig_ext = *(sig_extended.begin() + i - j);
             temp_state += it_sig_ext * butter.Coeff_b[j];
         }
-        for (int jj = 1; jj < butter.Coeff_size; jj++) {
+        for(int jj = 1; jj < butter.Coeff_size; jj++) {
             auto it_sig_out = *(sig_out.begin() + i - jj);
             temp_state -= it_sig_out * butter.Coeff_a[jj];
         }
         sig_out[i] = temp_state;
     }
 
-    for (auto it = sig_out.begin() + butter.extend_num; it != sig_out.end() - butter.extend_num; it++) {
+    for(auto it = sig_out.begin() + butter.extend_num; it != sig_out.end() - butter.extend_num; it++) {
         signal_out.push_back(*it);
     }
 }
@@ -315,36 +329,54 @@ void LI_Init::zero_phase_filt(const deque<CalibState> &signal_in, deque<CalibSta
 }
 
 void LI_Init::solve_Rotation_only() {
-    double R_LI_quat[4];
+    double R_LI_quat[4]; //旋转四元数初值，为 (w,x,y,z) 顺序
     R_LI_quat[0] = 1;
     R_LI_quat[1] = 0;
     R_LI_quat[2] = 0;
     R_LI_quat[3] = 0;
 
-    ceres::LocalParameterization *quatParam = new ceres::QuaternionParameterization();
+    ceres::LocalParameterization *quatParam = new ceres::QuaternionParameterization(); //参数化四元数
     ceres::Problem problem_rot;
     problem_rot.AddParameterBlock(R_LI_quat, 4, quatParam);
 
 
-    for (int i = 0; i < IMU_state_group.size(); i++) {
+    for(int i = 0; i < IMU_state_group.size(); i++) {
+        //Jacobian of Rotation
         M3D Lidar_angvel_skew;
         Lidar_angvel_skew << SKEW_SYM_MATRX(Lidar_state_group[i].ang_vel);
         problem_rot.AddResidualBlock(Angular_Vel_Cost_only_Rot::Create(IMU_state_group[i].ang_vel,
                                                                        Lidar_state_group[i].ang_vel),
-                                     nullptr,
+                                     nullptr,  //new ceres::CauchyLoss(1.0)
                                      R_LI_quat);
 
     }
+    //配置求解器
     ceres::Solver::Options options_quat;
-    ceres::Solver::Summary summary_quat;
-    ceres::Solve(options_quat, &problem_rot, &summary_quat);
+    ceres::Solver::Summary summary_quat; //误差平方和
+    ceres::Solve(options_quat, &problem_rot, &summary_quat);//开始求解
+
+    //设置最大迭代次数为1,则可输出每一步迭代的结果
+    /*
+    Eigen::Quaterniond q_LI(R_LI_quat[0], R_LI_quat[1], R_LI_quat[2], R_LI_quat[3]);
+    V3D euler_angle = RotMtoEuler(q_LI.matrix());
+    V3D last_euler_angle(0.0,0.0,0.5);
+    while(abs(euler_angle.norm() - last_euler_angle.norm()) > 0.001){
+        last_euler_angle = euler_angle;
+        ceres::Solve(options_quat, &problem_rot, &summary_quat);//开始求解
+        Eigen::Quaterniond q_LI_now(R_LI_quat[0], R_LI_quat[1], R_LI_quat[2], R_LI_quat[3]);
+        euler_angle = RotMtoEuler(q_LI_now.matrix());
+        cout << "R_LI:     " << euler_angle.transpose() * 57.3 << " deg" << endl << endl;
+    }
+     */
+
     Eigen::Quaterniond q_LI(R_LI_quat[0], R_LI_quat[1], R_LI_quat[2], R_LI_quat[3]);
     Rot_Lidar_wrt_IMU = q_LI.matrix();
+
 }
 
 void LI_Init::solve_Rot_bias_gyro(double &timediff_imu_wrt_lidar) {
     Eigen::Quaterniond quat(Rot_Lidar_wrt_IMU);
-    double R_LI_quat[4];
+    double R_LI_quat[4]; //旋转四元数初值，为 (w,x,y,z) 顺序，由上一步纯旋转优化获得
     R_LI_quat[0] = quat.w();
     R_LI_quat[1] = quat.x();
     R_LI_quat[2] = quat.y();
@@ -357,13 +389,13 @@ void LI_Init::solve_Rot_bias_gyro(double &timediff_imu_wrt_lidar) {
 
     double time_lag2 = 0; //Second time lag (IMU wtr Lidar)
 
-    ceres::LocalParameterization *quatParam = new ceres::QuaternionParameterization();
+    ceres::LocalParameterization *quatParam = new ceres::QuaternionParameterization(); //参数化四元数
     ceres::Problem problem_ang_vel;
 
     problem_ang_vel.AddParameterBlock(R_LI_quat, 4, quatParam);
     problem_ang_vel.AddParameterBlock(bias_g, 3);
 
-    for (int i = 0; i < IMU_state_group.size(); i++) {
+    for(int i = 0; i < IMU_state_group.size(); i++) {
         double deltaT = Lidar_state_group[i].timeStamp - IMU_state_group[i].timeStamp;
         problem_ang_vel.AddResidualBlock(Angular_Vel_Cost::Create(IMU_state_group[i].ang_vel,
                                                                   IMU_state_group[i].ang_acc,
@@ -375,10 +407,12 @@ void LI_Init::solve_Rot_bias_gyro(double &timediff_imu_wrt_lidar) {
                                          &time_lag2);
     }
 
-
+    //配置求解器
     ceres::Solver::Options options_quat;
-    ceres::Solver::Summary summary_quat;
-    ceres::Solve(options_quat, &problem_ang_vel, &summary_quat);
+    ceres::Solver::Summary summary_quat; //误差平方和
+    ceres::Solve(options_quat, &problem_ang_vel, &summary_quat);//开始求解
+
+
 
     Eigen::Quaterniond q_LI(R_LI_quat[0], R_LI_quat[1], R_LI_quat[2], R_LI_quat[3]);
     Rot_Lidar_wrt_IMU = q_LI.matrix();
@@ -387,25 +421,28 @@ void LI_Init::solve_Rot_bias_gyro(double &timediff_imu_wrt_lidar) {
 
     time_lag_2 = time_lag2;
     time_delay_IMU_wtr_Lidar = time_lag_1 + time_lag_2;
+//    cout << "SOFT time delay (IMU wtr Lidar) : " << time_delay_IMU_wtr_Lidar << " s" << endl;
     cout << "Total time delay (IMU wtr Lidar): " << time_delay_IMU_wtr_Lidar + timediff_imu_wrt_lidar << " s" << endl;
     cout << "Using LIO: SUBTRACT this value from IMU timestamp" << endl
          << "           or ADD this value to LiDAR timestamp." << endl <<endl;
 
-    //The second temporal compensation
+    //第二次时差补偿
     IMU_time_compensate(get_lag_time_2(), false);
 
-    for (int i = 0; i < Lidar_state_group.size(); i++) {
+    //file out
+    for(int i = 0; i < Lidar_state_group.size(); i++) {
         fout_after_rot << setprecision(12) << (Rot_Lidar_wrt_IMU * Lidar_state_group[i].ang_vel + gyro_bias).transpose()
                        << " " << Lidar_state_group[i].timeStamp << endl;
     }
 
 }
 
+
 void LI_Init::solve_trans_biasacc_grav() {
     M3D Rot_Init = Eye3d;
     Rot_Init.diagonal() = V3D(1, 1, 1);
     Eigen::Quaterniond quat(Rot_Init);
-    double R_GL0_quat[4];
+    double R_GL0_quat[4]; //旋转四元数初值，为 (w,x,y,z) 顺序
     R_GL0_quat[0] = quat.w();
     R_GL0_quat[1] = quat.x();
     R_GL0_quat[2] = quat.y();
@@ -421,7 +458,7 @@ void LI_Init::solve_trans_biasacc_grav() {
     Trans_IL[1] = 0.0;
     Trans_IL[2] = 0.0;
 
-    ceres::LocalParameterization *quatParam = new ceres::QuaternionParameterization();
+    ceres::LocalParameterization *quatParam = new ceres::QuaternionParameterization(); //参数化四元数
     ceres::Problem problem_acc;
 
     problem_acc.AddParameterBlock(R_GL0_quat, 4, quatParam);
@@ -437,7 +474,7 @@ void LI_Init::solve_trans_biasacc_grav() {
     MatrixXd Jaco_Trans(Jaco_size, 3);
     Jaco_Trans.setZero();
 
-    for (int i = 0; i < IMU_state_group.size(); i++) {
+    for(int i = 0; i < IMU_state_group.size(); i++) {
         problem_acc.AddResidualBlock(Linear_acc_Cost::Create(Lidar_state_group[i],
                                                              Rot_Lidar_wrt_IMU,
                                                              IMU_state_group[i].linear_acc),
@@ -456,14 +493,15 @@ void LI_Init::solve_trans_biasacc_grav() {
         Jacobian.block<3, 3>(3 * i, 6) = Jaco_trans_i;
     }
 
-    for (int index = 0; index < 3; ++index) {
+    for(int index = 0; index < 3; ++index) {
         problem_acc.SetParameterUpperBound(bias_aL, index, 0.01);
         problem_acc.SetParameterLowerBound(bias_aL, index, -0.01);
     }
 
+    //配置求解器
     ceres::Solver::Options options_acc;
-    ceres::Solver::Summary summary_acc;
-    ceres::Solve(options_acc, &problem_acc, &summary_acc);
+    ceres::Solver::Summary summary_acc; //误差平方和
+    ceres::Solve(options_acc, &problem_acc, &summary_acc);//开始求解
 
 
     Eigen::Quaterniond q_GL0(R_GL0_quat[0], R_GL0_quat[1], R_GL0_quat[2], R_GL0_quat[3]);
@@ -476,7 +514,8 @@ void LI_Init::solve_trans_biasacc_grav() {
     V3D Trans_IL_vec(Trans_IL[0], Trans_IL[1], Trans_IL[2]);
     Trans_Lidar_wrt_IMU = -Rot_Lidar_wrt_IMU * Trans_IL_vec;
 
-    for (int i = 0; i < IMU_state_group.size(); i++) {
+    //acc_cost log
+    for(int i = 0; i < IMU_state_group.size(); i++) {
         V3D acc_I = Lidar_state_group[i].rot_end * Rot_Lidar_wrt_IMU.transpose() * IMU_state_group[i].linear_acc -
                     Lidar_state_group[i].rot_end * bias_a_Lidar;
         V3D acc_L = Lidar_state_group[i].linear_acc +
@@ -485,21 +524,34 @@ void LI_Init::solve_trans_biasacc_grav() {
                       << IMU_state_group[i].timeStamp << " " << Lidar_state_group[i].timeStamp << endl;
     }
 
+    //特征值
     M3D Hessian_Trans = Jaco_Trans.transpose() * Jaco_Trans;
     EigenSolver<M3D> es_trans(Hessian_Trans);
     M3D EigenValue_mat_trans = es_trans.pseudoEigenvalueMatrix();
     M3D EigenVec_mat_trans = es_trans.pseudoEigenvectors();
+//    cout << "Eigen value matrix of Trans Hessian(JTJ) : " <<endl << EigenValue_mat_trans <<endl;
+//    cout << "Eigen vector matrix of Trans Hessian(JTJ): " <<endl << EigenVec_mat_trans <<endl <<endl;
 
+    //特征值
+    /*
+    Matrix<double,9,9> Hessian = Jacobian.transpose() * Jacobian;
+    EigenSolver<Matrix<double,9,9>> es(Hessian);
+    Matrix<double,9,9> EigenValue_mat = es.pseudoEigenvalueMatrix();
+    Matrix<double,9,9> EigenVec_mat = es.pseudoEigenvectors();
+    cout << "Eigen value matrix of (bias, g, trans) Hessian(JTJ) : " <<endl << EigenValue_mat <<endl;
+    cout << "Eigen vector matrix of (bias, g, trans) Hessian(JTJ): " <<endl << EigenVec_mat <<endl <<endl;
+     */
 }
+
 
 void LI_Init::normalize_acc(deque<CalibState> &signal_in) {
     V3D mean_acc(0, 0, 0);
 
-    for (int i = 1; i < 10; i++) {
+    for(int i = 1; i < 10; i++) {
         mean_acc += (signal_in[i].linear_acc - mean_acc) / i;
     }
 
-    for (int i = 0; i < signal_in.size(); i++) {
+    for(int i = 0; i < signal_in.size(); i++) {
         signal_in[i].linear_acc = signal_in[i].linear_acc / mean_acc.norm() * G_m_s2;
     }
 }
@@ -513,11 +565,13 @@ bool LI_Init::data_sufficiency_assess(MatrixXd &Jacobian_rot, int &frame_num, V3
     bool data_sufficient = false;
 
     //Give a Data Appraisal every second
-    if (frame_num % orig_odom_freq * cut_frame_num == 0) {
+    if(frame_num % orig_odom_freq * cut_frame_num == 0) {
         M3D Hessian_rot = Jacobian_rot.transpose() * Jacobian_rot;
         EigenSolver<M3D> es(Hessian_rot);
         V3D EigenValue = es.eigenvalues().real();
         M3D EigenVec_mat = es.eigenvectors().real();
+//        cout << "Eigen values of Rotation Hessian(JTJ)  : " << EigenValue.transpose() << endl;
+//        cout << "Hessian Matrix = " <<endl << EigenVec_mat <<endl;
 
         M3D EigenMatCwise = EigenVec_mat.cwiseProduct(EigenVec_mat);
         std::vector<double> EigenMat_1_col{EigenMatCwise(0, 0), EigenMatCwise(1, 0), EigenMatCwise(2, 0)};
@@ -529,7 +583,7 @@ bool LI_Init::data_sufficiency_assess(MatrixXd &Jacobian_rot, int &frame_num, V3
         maxPos[1] = max_element(EigenMat_2_col.begin(), EigenMat_2_col.end()) - EigenMat_2_col.begin();
         maxPos[2] = max_element(EigenMat_3_col.begin(), EigenMat_3_col.end()) - EigenMat_3_col.begin();
 
-        V3D Scaled_Eigen = EigenValue / data_accum_length;   //the larger data_accum_length is, the more data is needed
+        V3D Scaled_Eigen = EigenValue / data_accum_length;   //可调阈值，越大需要数据越多
         V3D Rot_percent(Scaled_Eigen[1] * Scaled_Eigen[2],
                         Scaled_Eigen[0] * Scaled_Eigen[2],
                         Scaled_Eigen[0] * Scaled_Eigen[1]);
@@ -538,7 +592,7 @@ bool LI_Init::data_sufficiency_assess(MatrixXd &Jacobian_rot, int &frame_num, V3
                                Rot_percent[1] < 0.99 ? Rot_percent[1] : 1,
                                Rot_percent[2] < 0.99 ? Rot_percent[2] : 1);
 
-        int axis[3];
+        int axis[3]; //X,Y,Z轴在特征向量中最接近的index
         axis[2] = max_element(maxPos, maxPos + 3) - maxPos;
         axis[0] = min_element(maxPos, maxPos + 3) - maxPos;
         axis[1] = 3 - (axis[0] + axis[2]);
@@ -546,17 +600,17 @@ bool LI_Init::data_sufficiency_assess(MatrixXd &Jacobian_rot, int &frame_num, V3
 
         clear(); //clear the screen
         printf("\033[3A\r");
-        printProgress(Rot_percent_scaled[axis[0]], 88);
-        printProgress(Rot_percent_scaled[axis[1]], 89);
-        printProgress(Rot_percent_scaled[axis[2]], 90);
+        printProgress(Rot_percent_scaled[axis[0]], 88);  //X轴对应percentage和ASCII码
+        printProgress(Rot_percent_scaled[axis[1]], 89);  //Y轴对应percentage和ASCII码
+        printProgress(Rot_percent_scaled[axis[2]], 90);  //Z轴对应percentage和ASCII码
         fflush(stdout);
-        if (Rot_percent[0] > 0.99 && Rot_percent[1] > 0.99 && Rot_percent[2] > 0.99) {
+        if(Rot_percent[0] > 0.99 && Rot_percent[1] > 0.99 && Rot_percent[2] > 0.99) {
             printf(BOLDCYAN "[Initialization] Data accumulation finished, Lidar IMU initialization begins.\n\n" RESET);
             printf(BOLDBLUE"============================================================ \n\n" RESET);
             data_sufficient = true;
         }
     }
-    if (data_sufficient)
+    if(data_sufficient)
         return true;
     else
         return false;
@@ -568,7 +622,7 @@ void LI_Init::printProgress(double percentage, int axis_ascii) {
     int lpad = (int) (percentage * PBWIDTH);
     int rpad = PBWIDTH - lpad;
     printf(BOLDCYAN "[Initialization] ");
-    if (percentage < 1) {
+    if(percentage < 1) {
         printf(BOLDYELLOW "Rotation around Lidar %c Axis: ", char(axis_ascii));
         printf(YELLOW "%3d%% [%.*s%*s]\n", val, lpad, PBSTR, rpad, "");
         cout << RESET;
@@ -590,38 +644,47 @@ void LI_Init::LI_Initialization(int &orig_odom_freq, int &cut_frame_num, double 
     TimeConsuming time("Batch optimization");
 
     downsample_interpolate_IMU(move_start_time);
-    fout_before_filter();
+    fout_before_filter();//导出原始的omg,acc
     IMU_time_compensate(0.0, true);
 
 
+    //第一次零相位滤波
     deque<CalibState> IMU_after_zero_phase;
     deque<CalibState> Lidar_after_zero_phase;
-    zero_phase_filt(get_IMU_state(), IMU_after_zero_phase);
-    normalize_acc(IMU_after_zero_phase);
-    zero_phase_filt(get_Lidar_state(), Lidar_after_zero_phase);
-    set_IMU_state(IMU_after_zero_phase);
-    set_Lidar_state(Lidar_after_zero_phase);
+    zero_phase_filt(get_IMU_state(), IMU_after_zero_phase); //对IMU得到的原始omg,acc数据滤波
+    normalize_acc(IMU_after_zero_phase); //重新归一化加速度
+    zero_phase_filt(get_Lidar_state(), Lidar_after_zero_phase); //对LO得到的原始omg数据滤波
+    set_IMU_state(IMU_after_zero_phase); //将滤波后的IMU的omg,acc赋值给IMU_state_group
+    set_Lidar_state(Lidar_after_zero_phase);//将滤波后的Lidar的omg赋值给Lidar_state_group
     cut_sequence_tail();
 
-    xcorr_temporal_init(orig_odom_freq * cut_frame_num);
-    IMU_time_compensate(get_lag_time_1(), false);
 
+    //基于最大互相关的时间差计算
+    xcorr_temporal_init(orig_odom_freq * cut_frame_num); //最大相关性计算时间差
+    IMU_time_compensate(get_lag_time_1(), false);//第一次时间差补偿
+
+    //中心差分计算IMU的角加速度、Lidar的角加速度和线加速度
     central_diff();
 
+    //第二次滤波：对IMU的角加速度，Lidar的角加速度和加速度再滤波
     deque<CalibState> IMU_after_2nd_zero_phase;
     deque<CalibState> Lidar_after_2nd_zero_phase;
     zero_phase_filt(get_IMU_state(), IMU_after_2nd_zero_phase);
     zero_phase_filt(get_Lidar_state(), Lidar_after_2nd_zero_phase);
     set_states_2nd_filter(IMU_after_2nd_zero_phase, Lidar_after_2nd_zero_phase);
 
-
+    //仅优化旋转外参
     solve_Rotation_only();
 
+
+    //非线性优化求得旋转外参、陀螺仪bias和第二次时差，第二次时差补偿在函数内
     solve_Rot_bias_gyro(timediff_imu_wrt_lidar);
 
+    //插值获得 acc_I(t_k)
     acc_interpolate();
 
-    solve_trans_biasacc_grav();
+    //非线性优化求平移外参、加速度计bias、重力
+    solve_trans_biasacc_grav();  //重力模长固定，优化惯性系到L0系的旋转
 
     printf(BOLDBLUE"============================================================ \n\n" RESET);
     double time_L_I = timediff_imu_wrt_lidar + time_delay_IMU_wtr_Lidar;
@@ -652,16 +715,16 @@ LI_Init::print_initialization_result(double &time_L_I, M3D &R_L_I, V3D &p_L_I, V
 
 void LI_Init::plot_result() {
     vector<vector<double>> IMU_omg(3), IMU_acc(3), IMU_ang_acc(3), Lidar_omg(3), Lidar_acc(3), Lidar_ang_acc(3);
-    for (auto it_IMU_state = IMU_state_group.begin(); it_IMU_state != IMU_state_group.end() - 1; it_IMU_state++) {
-        for (int i = 0; i < 3; i++) {
+    for(auto it_IMU_state = IMU_state_group.begin(); it_IMU_state != IMU_state_group.end() - 1; it_IMU_state++) {
+        for(int i = 0; i < 3; i++) {
             IMU_omg[i].push_back(it_IMU_state->ang_vel[i]);
             IMU_acc[i].push_back(it_IMU_state->linear_acc[i]);
             IMU_ang_acc[i].push_back(it_IMU_state->ang_acc[i]);
         }
     }
-    for (auto it_Lidar_state = Lidar_state_group.begin();
+    for(auto it_Lidar_state = Lidar_state_group.begin();
          it_Lidar_state != Lidar_state_group.end() - 1; it_Lidar_state++) {
-        for (int i = 0; i < 3; i++) {
+        for(int i = 0; i < 3; i++) {
             Lidar_omg[i].push_back(it_Lidar_state->ang_vel[i]);
             Lidar_acc[i].push_back(it_Lidar_state->linear_acc[i]);
             Lidar_ang_acc[i].push_back(it_Lidar_state->ang_acc[i]);

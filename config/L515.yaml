@@ -1,32 +1,30 @@
 common:
-    lid_topic:  "/hesai/pandar_points"
-    imu_topic:  "/mavros/imu/data_raw"
+    lid_topic:  "/camera/depth/color/points"
+    imu_topic:  "/camera/imu"
+#    imu_topic:  "/livox/imu"
 
 preprocess:
-    lidar_type: 5                # Hesai PandarXT
-    scan_line: 32
-    blind: 2
+    lidar_type: 4                # Realsense L515
     feature_extract_en: false
-
+    scan_line: 6
+    blind: 1
+    
 calibration:
-    cut_frame_num: 3 # must be positive integer
-    orig_odom_freq: 10
-    mean_acc_norm: 9.805
-    online_refine_time: 10
-    data_accum_length: 600
-    Rot_LI_cov: [ 0.00005, 0.00005, 0.00005 ]
-    Trans_LI_cov: [ 0.00001, 0.00001, 0.00000001 ]
+    orig_odom_freq: 30
+    mean_acc_norm: 9.81 # 1: for livox built-in IMU
+    online_refine_time: 30.0
+    data_accum_length: 100
 
 mapping:
     imu_en: false
-    filter_size_surf: 0.3
-    filter_size_map: 0.5
-    gyr_cov: 20
-    acc_cov: 2
+    filter_size_surf: 0.05
+    filter_size_map: 0.15
+    acc_cov: 10
+    gyr_cov: 2
     b_acc_cov: 0.0001
     b_gyr_cov: 0.0001
-    det_range:     300.0
-    extrinsic_T: [ 0.0, 0.0, 0.0]
+    det_range:     10.0
+    extrinsic_T: [ 0.0, 0.0, 0.0 ]
     extrinsic_R: [ 1, 0, 0,
                    0, 1, 0,
                    0, 0, 1]

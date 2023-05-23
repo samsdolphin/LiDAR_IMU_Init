@@ -32,17 +32,17 @@ public:
     }
 
     ~TimeConsuming() {
-        if (!has_shown && enable_) {
+        if(!has_shown && enable_) {
             tc_end = std::chrono::high_resolution_clock::now();
             double dt = std::chrono::duration_cast<std::chrono::duration<double>>(tc_end - tc_start).count();
             double t_us = (double) dt * 1e6 / repeat_time_;
-            if (t_us < 1) {
+            if(t_us < 1) {
                 t_us *= 1000;
                 printf("[TIMER] %s time consuming \033[32m %lf ns\033[0m\n", msg_.c_str(), t_us);
-            } else if (t_us > 1e6) {
+            } else if(t_us > 1e6) {
                 t_us /= 1e6;
                 printf("[TIMER] %s time consuming \033[32m %lf s\033[0m\n", msg_.c_str(), t_us);
-            } else if (t_us > 1e3) {
+            } else if(t_us > 1e3) {
                 t_us /= 1e3;
                 printf("[TIMER] %s time consuming \033[32m %lf ms\033[0m\n", msg_.c_str(), t_us);
             }else
@@ -65,13 +65,13 @@ public:
         double dt = std::chrono::duration_cast<std::chrono::duration<double>>(tc_end - tc_start).count();
         //            ROS_WARN("%s time consuming %lf us.",msg_.c_str(),(double)(end_t - start_t).toNSec()/ 1e3);
         double t_us = (double) dt * 1e6 / repeat_time_;
-        if (t_us < 1) {
+        if(t_us < 1) {
             t_us *= 1000;
             printf(" -- [TIMER] %s time consuming \033[32m %lf ns\033[0m\n", msg_.c_str(), t_us);
-        } else if (t_us > 1e6) {
+        } else if(t_us > 1e6) {
             t_us /= 1e6;
             printf(" -- [TIMER] %s time consuming \033[32m %lf s\033[0m\n", msg_.c_str(), t_us);
-        } else if (t_us > 1e3) {
+        } else if(t_us > 1e3) {
             t_us /= 1e3;
             printf(" -- [TIMER] %s time consuming \033[32m %lf ms\033[0m\n", msg_.c_str(), t_us);
         }else

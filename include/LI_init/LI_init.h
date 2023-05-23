@@ -26,7 +26,7 @@ typedef Vector3d V3D;
 typedef Matrix3d M3D;
 const V3D STD_GRAV = V3D(0, 0, -G_m_s2);
 
-// Lidar Inertial Initialization
+// Lidar IMU Initialization
 // States needed by Initialization
 struct CalibState {
     M3D rot_end;
@@ -84,6 +84,7 @@ struct CalibState {
         this->ang_acc = b.ang_acc;
         this->linear_vel = b.linear_vel;
         this->linear_acc = b.linear_acc;
+//        this->timeStamp = b.timeStamp;
         return *this;
     };
 };
@@ -108,7 +109,7 @@ struct Angular_Vel_Cost_only_Rot {
     }
 
     static ceres::CostFunction *Create(const V3D IMU_ang_vel_, const V3D Lidar_ang_vel_) {
-        return (new ceres::AutoDiffCostFunction<Angular_Vel_Cost_only_Rot, 3, 4>(
+        return (new ceres::AutoDiffCostFunction<Angular_Vel_Cost_only_Rot, 3, 4>(  //自动求导
                 new Angular_Vel_Cost_only_Rot(IMU_ang_vel_, Lidar_ang_vel_)));
     }
 
@@ -148,7 +149,7 @@ struct Angular_Vel_Cost {
 
     static ceres::CostFunction *
     Create(const V3D IMU_ang_vel_, const V3D IMU_ang_acc_, const V3D Lidar_ang_vel_, const double deltaT_LI_) {
-        return (new ceres::AutoDiffCostFunction<Angular_Vel_Cost, 3, 4, 3, 1>(
+        return (new ceres::AutoDiffCostFunction<Angular_Vel_Cost, 3, 4, 3, 1>(  //自动求导
                 new Angular_Vel_Cost(IMU_ang_vel_, IMU_ang_acc_, Lidar_ang_vel_, deltaT_LI_)));
     }
 
@@ -158,6 +159,7 @@ struct Angular_Vel_Cost {
     double deltaT_LI;
 };
 
+//重力模长固定，优化惯性系到初始雷达系的旋转
 struct Linear_acc_Cost {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -195,7 +197,7 @@ struct Linear_acc_Cost {
     }
 
     static ceres::CostFunction *Create(const CalibState LidarState_, const M3D R_LI_, const V3D IMU_linear_acc_) {
-        return (new ceres::AutoDiffCostFunction<Linear_acc_Cost, 3, 4, 3, 3>(
+        return (new ceres::AutoDiffCostFunction<Linear_acc_Cost, 3, 4, 3, 3>(  //自动求导
                 new Linear_acc_Cost(LidarState_, R_LI_, IMU_linear_acc_)));
     }
 
@@ -208,7 +210,7 @@ struct Linear_acc_Cost {
 class LI_Init {
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    ofstream fout_LiDAR_meas, fout_IMU_meas, fout_before_filt_IMU, fout_before_filt_Lidar, fout_acc_cost, fout_after_rot;
+    ofstream fout_LiDAR_meas, fout_IMU_meas, fout_before_filt_IMU, fout_before_filt_Lidar, fout_acc_cost, fout_after_rot, fout_correlation;
     double data_accum_length;
 
     LI_Init();
@@ -220,7 +222,7 @@ public:
         double Coeff_b[7] = {0.000076, 0.000457, 0.001143, 0.001524, 0.0011, 0.000457, 0.000076};
         double Coeff_a[7] = {1.0000, -4.182389, 7.491611, -7.313596, 4.089349, -1.238525, 0.158428};
         int Coeff_size = 7;
-        int extend_num = 0;
+        int extend_num = 0; //拓延信号的长度
     };
 
 
@@ -232,6 +234,7 @@ public:
 
     void push_Lidar_CalibState(const M3D &rot, const V3D &omg, const V3D &linear_vel, const double &timestamp);
 
+    //对原始的IMU做均值滤波，再降采样得到 IMU_state_group
     void downsample_interpolate_IMU(const double &move_start_time);
 
     void central_diff();
@@ -263,7 +266,7 @@ public:
 
     void solve_Rot_bias_gyro(double &timediff_imu_wrt_lidar);
 
-    void solve_trans_biasacc_grav();
+    void solve_trans_biasacc_grav();  //优化重力到L0的旋转，g模长固定
 
     void LI_Initialization(int &orig_odom_freq, int &cut_frame_num, double &timediff_imu_wrt_lidar,
                            const double &move_start_time);
@@ -320,22 +323,6 @@ public:
         return Lidar_state_group;
     }
 
-    void IMU_state_group_ALL_pop_front(){
-        IMU_state_group_ALL.pop_front();
-    }
-
-    void Lidar_state_group_pop_front(){
-        Lidar_state_group.pop_front();
-    }
-
-    int IMU_state_group_ALL_size(){
-        return IMU_state_group_ALL.size();
-    }
-
-    int Lidar_state_group_size(){
-        return Lidar_state_group.size();
-    }
-
 private:
     deque<CalibState> IMU_state_group;
     deque<CalibState> Lidar_state_group;
@@ -350,9 +337,9 @@ private:
     V3D gyro_bias;                // gyro bias
     V3D acc_bias;                 // acc bias
     double time_delay_IMU_wtr_Lidar; //(Soft) time delay between IMU and Lidar = time_lag_1 + time_lag_2
-    double time_lag_1;            //Time offset estimated by cross-correlation
-    double time_lag_2;            //Time offset estimated by unified optimization
-    int lag_IMU_wtr_Lidar;        //positive: timestamp of IMU is larger than that of LiDAR
+    double time_lag_1;            //通过xcorr计算出的第一个时间滞后
+    double time_lag_2;            //通过联合优化计算出的第二个时间滞后
+    int lag_IMU_wtr_Lidar;        //IMU滞后雷达的测量个数：为正表示IMU滞后于雷达(IMU时间戳更大)
 };
 
 #endif

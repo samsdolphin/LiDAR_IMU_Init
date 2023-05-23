@@ -1,6 +1,8 @@
 common:
     lid_topic:  "/os_cloud_node/points"
-    imu_topic:  "/mavros/imu/data_raw"
+    imu_topic:  "/vectornav/IMU"
+#    lid_topic:  "/os1_cloud_node1/points"
+#    imu_topic:  "/os1_cloud_node1/imu"
 
 preprocess:
     lidar_type: 3                # Ouster LiDAR
@@ -8,23 +10,28 @@ preprocess:
     blind: 4
     feature_extract_en: false
 
-initialization:
-    cut_frame_num: 3 # must be positive integer
+calibration:
+    cut_frame_num: 5 # must be positive integer
     orig_odom_freq: 10
-    mean_acc_norm: 9.805
-    online_refine_time: 15
+    mean_acc_norm: 9.8
+    online_refine_time: 30
     data_accum_length: 300
     Rot_LI_cov: [ 0.00005, 0.00005, 0.00005 ]
     Trans_LI_cov: [ 0.0001, 0.0001, 0.0001 ]
 
 mapping:
+    imu_en: false
     filter_size_surf: 0.05
     filter_size_map: 0.15
     gyr_cov: 50
     acc_cov: 2
     b_acc_cov: 0.0001
     b_gyr_cov: 0.0001
-    det_range: 150.0
+    det_range:     150.0
+    extrinsic_T: [ 0.0, -0.0, -0.0 ]
+    extrinsic_R: [1, 0, 0, 
+                   0, 1, 0, 
+                   0, 0, 1]
 
 publish:
     path_en:  true

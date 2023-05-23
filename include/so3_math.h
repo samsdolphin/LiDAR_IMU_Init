@@ -20,7 +20,7 @@ Eigen::Matrix<T, 3, 3> Exp(const Eigen::Matrix<T, 3, 1> &ang)
 {
     T ang_norm = ang.norm();
     Eigen::Matrix<T, 3, 3> Eye3 = Eigen::Matrix<T, 3, 3>::Identity();
-    if (ang_norm > 0.0000001)
+    if(ang_norm > 0.0000001)
     {
         Eigen::Matrix<T, 3, 1> r_axis = ang / ang_norm;
         Eigen::Matrix<T, 3, 3> K;
@@ -40,7 +40,7 @@ Eigen::Matrix<T, 3, 3> Exp(const Eigen::Matrix<T, 3, 1> &ang_vel, const Ts &dt)
     T ang_vel_norm = ang_vel.norm();
     Eigen::Matrix<T, 3, 3> Eye3 = Eigen::Matrix<T, 3, 3>::Identity();
 
-    if (ang_vel_norm > 0.0000001)
+    if(ang_vel_norm > 0.0000001)
     {
         Eigen::Matrix<T, 3, 1> r_axis = ang_vel / ang_vel_norm;
         Eigen::Matrix<T, 3, 3> K;
@@ -63,7 +63,7 @@ Eigen::Matrix<T, 3, 3> Exp(const T &v1, const T &v2, const T &v3)
 {
     T &&norm = sqrt(v1 * v1 + v2 * v2 + v3 * v3);
     Eigen::Matrix<T, 3, 3> Eye3 = Eigen::Matrix<T, 3, 3>::Identity();
-    if (norm > 0.00001)
+    if(norm > 0.00001)
     {
         T r_ang[3] = {v1 / norm, v2 / norm, v3 / norm};
         Eigen::Matrix<T, 3, 3> K;
@@ -84,7 +84,7 @@ Eigen::Matrix<T, 3, 3> A_cal(const Eigen::Matrix<T, 3, 1> & ang_vel)
 {
     T norm = ang_vel.norm();
     Eigen::Matrix<T, 3, 3> Eye3 = Eigen::Matrix<T, 3, 3>::Identity();
-    if (norm > 0.00001)
+    if(norm > 0.00001)
     {
         Eigen::Matrix<T, 3, 1> r_ang = ang_vel / norm;
         Eigen::Matrix<T, 3, 3> K;
